@@ -1,0 +1,3 @@
+SET test1 value1
+SET test2 value2
+DEL test1
