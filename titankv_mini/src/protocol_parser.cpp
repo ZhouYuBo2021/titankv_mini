@@ -30,21 +30,60 @@ std::string ProtocolParser::parse(KVStore& store, const std::string& request)
 
     if (command == "SET")
     {
-        std::string key, value;
+        std::string key, value_part, ttl_str;
         iss >> key;
 
-        // 获取剩余本分为value
-        std::getline(iss, value);
+        // 检查是否有TTL参数
+        bool has_ttl = false;
+        int64_t ttl_seconds = 0;
 
-        // 去除前导空格
-        value.erase(0, value.find_first_not_of(" \t"));
+        // 获取剩余部分
+        std::string rest;
+        std::getline(iss, rest);
 
-        if (key.empty() || value.empty())
+        // 查找TTL关键字
+        size_t ttl_pos = rest.find("TTL");
+        if (ttl_pos != std::string::npos)
         {
-            return "ERR SET requires key and value\n";
+            // 提取value部分
+            value_part = rest.substr(0, ttl_pos);
+            // 去除前导和尾随空格
+            value_part.erase(0, value_part.find_first_not_of(" \t"));
+            value_part.erase(value_part.find_last_not_of(" \t") + 1);
+
+            // 提取TTL值
+            std::istringstream ttl_iss(rest.substr(ttl_pos + 3)); // +3 跳过 "TTL"
+            ttl_iss >> ttl_str;
+
+            try {
+                ttl_seconds = std::stoll(ttl_str);
+                has_ttl = true;
+            } catch (const std::invalid_argument& e) {
+                return "ERR invalid TTL value\n";
+            } catch (const std::out_of_range& e) {
+                return "ERR TTL value out of range\n";
+            }
+
+        }else
+        {
+            // 没有TTL参数
+            value_part = rest;
+            // 去除前导空格
+            value_part.erase(0, value_part.find_first_not_of(" \t"));
         }
 
-        return parse_set(store, key, value);
+        if (key.empty() || value_part.empty()) {
+            return "ERR SET requires key and value\n";
+        }
+        
+        if (has_ttl) {
+            if (ttl_seconds <= 0) {
+                return "ERR TTL must be positive\n";
+            }
+            return parse_set_with_ttl(store, key, value_part, ttl_seconds);
+        } else {
+            return parse_set(store, key, value_part);
+        }
     }
     else if (command == "GET")
     {
@@ -76,6 +115,11 @@ std::string ProtocolParser::parse(KVStore& store, const std::string& request)
 bool ProtocolParser::is_valid_command(const std::string& command)
 {
     std::string cmd = command;
+    // 提取命令部分（忽略参数）
+    size_t space_pos = cmd.find(' ');
+    if (space_pos != std::string::npos) {
+        cmd = cmd.substr(0, space_pos);
+    }
     std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
     return cmd == "SET" || cmd == "GET" || cmd == "DEL";
 }
@@ -106,6 +150,19 @@ std::string ProtocolParser::parse_set(KVStore& store, const std::string& key, co
     {
         return "ERR " + std::string(e.what()) + "\n";
     }
+}
+
+// 接下带有TTL的SET命令
+std::string ProtocolParser::parse_set_with_ttl(KVStore& store, const std::string& key, const std::string& value, int64_t ttl_seconds)
+{
+    try {
+        store.set_with_ttl(key, value, std::chrono::seconds(ttl_seconds));
+        return "OK\n";
+    } catch (const std::exception& e)
+    {
+        return "ERR " + std::string(e.what()) + "\n"; 
+    }
+
 }
 
 // 解析GET命令

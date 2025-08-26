@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <string>
 #include <mutex>
+#include <chrono>
+#include <atomic>
 #include <vector>
 
 // 添加Wal类的前置声明
@@ -19,6 +21,9 @@ public:
 
     // SET
     void set(const std::string& key, const std::string& value, bool log = true);
+    
+    // 设置带过期时间的键值对
+    void set_with_ttl(const std::string& key, const std::string& value, std::chrono::seconds ttl, bool log = true);
 
     // GET
     std::string get(const std::string& key);
@@ -36,9 +41,14 @@ public:
     std::vector<std::string> keys() const;
 
 private:
-    std::unordered_map<std::string, std::string> data_; // 数据存储
+    std::unordered_map<std::string, std::pair<std::string, std::chrono::steady_clock::time_point>> data_; // 数据存储 + 过期时间戳
     mutable std::mutex mutex_; // 互斥锁，用mutable修饰，即使是const依旧可以修改
     WAL* wal; //持久化日志系统类指针
+    std::atomic<bool> ttl_cleanup_running_; // TTL清理线程状态
+    std::thread ttl_cleanup_thread_; // TTL清理线程
+
+    // 清理过期键
+    void cleanup_expired_keys();
 
     // 禁止拷贝构造和赋值
     KVStore(const KVStore&) = delete;

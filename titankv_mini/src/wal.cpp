@@ -63,6 +63,26 @@ void WAL::log_del(const std::string& key)
     }
 }
 
+// 记录TTL信息到日志
+void WAL::log_ttl(const std::string& key, int64_t ttl_seconds)
+{
+    // 加锁确保线程安全
+    std::lock_guard<std::mutex> lock(log_mutex);
+    // 构建日志条目
+    std::string entry = "TTL " + key + " " + std::to_string(ttl_seconds) + "\n";
+    // 将条目写入文件
+    log_file << entry;
+    // 立即刷新缓冲区，确保数据持久化到硬盘
+    log_file.flush();
+
+    //检查是否写入成功
+    if (!log_file.good())
+    {
+        throw std::runtime_error("Failed to write to WAL file");
+    }
+
+}
+
 // 重放日志以恢复数据
 void WAL::replay(KVStore& store)
 {
@@ -100,6 +120,7 @@ void WAL::replay(KVStore& store)
     std::string line;     // 存储每行数据
     int count = 0;        // 记录恢复的操作数量
     int line_number = 0;  // 记录行号用于错误报告
+    std::unordered_map<std::string, int64_t> ttl_map;// 临时存储TTL信息
 
     // 一行一行来
     while (std::getline(infile, line))
@@ -138,9 +159,46 @@ void WAL::replay(KVStore& store)
         {
             store.del(args, false);
             count++;
-        } else 
+        } else if (cmd == "TTL")
+        {
+            // 找到key 和ttl之间的空格
+            size_t key_end = args.find(' ');
+            if (key_end != std::string::npos)
+            {
+                std::string key = args.substr(0, key_end);
+                std::string ttl_str = args.substr(key_end + 1);
+                try {
+                    int64_t ttl_seconds = std::stoll(ttl_str);
+                    // 存储TTL信息，稍后应用
+                    ttl_map[key] = ttl_seconds;
+                } catch (const std::invalid_argument& e) 
+                {
+                    std::cerr << "Warning: Invalid TTL value at line " << line_number << ", skipping" << std::endl;
+                } catch (const std::out_of_range& e) 
+                {
+                    std::cerr << "Warning: TTL value out of range at line " << line_number << ", skipping" << std::endl;
+                }
+            } else 
+            {
+                std::cerr << "Warning: Invalid TTL format at line " << line_number << ", skipping" << std::endl;
+            }
+        }         
+        else 
         {
             std::cerr << "Warning: Unkown command" << cmd << "at line" << line_number << ", skipping" << std::endl;
+        }
+    }
+
+    // 应用TTL信息
+    for (const auto& pair : ttl_map) 
+    {
+        // 检查键是否存在
+        std::string value = store.get(pair.first);
+        if (!value.empty()) 
+        {
+            // 键存在，应用TTL
+            store.set_with_ttl(pair.first, value, std::chrono::seconds(pair.second), false);
+            count++;
         }
     }
 

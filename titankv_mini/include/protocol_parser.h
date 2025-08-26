@@ -20,6 +20,9 @@ private:
     // 解析SET命令
     static std::string parse_set(KVStore& store, const std::string& key, const std::string& value);
 
+    // 解析带有TTL的SET命令
+    static std::string parse_set_with_ttl(KVStore& store, const std::string& key, const std::string& value, int64_t ttl_seconds);
+
     // 解析GET命令
     static std::string parse_get(KVStore& store, const std::string& key);
 

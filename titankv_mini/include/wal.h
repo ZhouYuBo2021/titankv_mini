@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <string>
 
 // 前向声明
 class KVStore;
@@ -19,6 +20,9 @@ public:
 
     // 记录DEL到操作日志
     void log_del(const std::string& key);
+
+    // 记录ttl信息到日志
+    void log_ttl(const std::string& key, int64_t ttl_seconds);
 
     // 重放日志以恢复数据
     void replay(KVStore& store);
