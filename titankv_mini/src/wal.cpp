@@ -68,8 +68,10 @@ void WAL::log_ttl(const std::string& key, int64_t ttl_seconds)
 {
     // 加锁确保线程安全
     std::lock_guard<std::mutex> lock(log_mutex);
-    // 构建日志条目
-    std::string entry = "TTL " + key + " " + std::to_string(ttl_seconds) + "\n";
+    // 构建日志条目：格式："TTL KEY TTL_SECONDS TIMESTAMP\n"
+    auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string entry = "TTL " + key + " " + std::to_string(ttl_seconds) + " " + std::to_string(timestamp) + "\n";
     // 将条目写入文件
     log_file << entry;
     // 立即刷新缓冲区，确保数据持久化到硬盘
@@ -161,25 +163,58 @@ void WAL::replay(KVStore& store)
             count++;
         } else if (cmd == "TTL")
         {
-            // 找到key 和ttl之间的空格
+            // 找到key和ttl之间的空格，以及ttl和timestamp之间的空格
+            // 格式："TTL KEY TTL_SECONDS TIMESTAMP\n"
             size_t key_end = args.find(' ');
             if (key_end != std::string::npos)
             {
-                std::string key = args.substr(0, key_end);
-                std::string ttl_str = args.substr(key_end + 1);
-                try {
-                    int64_t ttl_seconds = std::stoll(ttl_str);
-                    // 存储TTL信息，稍后应用
-                    ttl_map[key] = ttl_seconds;
-                } catch (const std::invalid_argument& e) 
+                std::string key_part = args.substr(0, key_end);
+                std::string remaining = args.substr(key_end + 1);
+                size_t ttl_end = remaining.find(' ');
+
+                if (ttl_end != std::string::npos)
                 {
-                    std::cerr << "Warning: Invalid TTL value at line " << line_number << ", skipping" << std::endl;
-                } catch (const std::out_of_range& e) 
-                {
-                    std::cerr << "Warning: TTL value out of range at line " << line_number << ", skipping" << std::endl;
+                    std::string key = key_part;
+                    std::string ttl_str = remaining.substr(0, ttl_end);
+                    std::string timestamp_str = remaining.substr(ttl_end + 1);
+
+                    try {
+                        // 将字符串转换为长整型（long long int）
+                        int64_t ttl_seconds = std::stoll(ttl_str);
+                        int64_t timestamp = std::stoll(timestamp_str);
+
+                        // 计算剩余TTL时间
+                        auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::now().time_since_epoch()).count();
+                        // timestamp是存储该键值对时的timestamp
+                        int64_t elapsed = now - timestamp;
+                        int64_t remaining_ttl = (elapsed < ttl_seconds) ? (ttl_seconds - elapsed) : 1;
+
+                        // 存储剩余TTL时间
+                        ttl_map[key] = remaining_ttl;
+                    } catch (const std::invalid_argument& e) {
+                        std::cerr << "Warning: Invalid TTL or timestamp value at line " << line_number << ", skipping" << std::endl;
+                    } catch (const std::out_of_range& e) {
+                        std::cerr << "Warning: TTL or timestamp value out of range at line " << line_number << ", skipping" << std::endl;
+                    }
+
+                } else {
+                    // 兼容旧格式TTL key ttl_seconds
+                    std::string key = key_part;
+                    std::string ttl_str = remaining;
+                    
+                    try {
+                        int64_t ttl_seconds = std::stoll(ttl_str);
+                        // 存储TTL信息，稍后应用
+                        ttl_map[key] = ttl_seconds;
+                    } catch (const std::invalid_argument& e) {
+                        std::cerr << "Warning: Invalid TTL value at line " << line_number << ", skipping" << std::endl;
+                    } catch (const std::out_of_range& e) {
+                        std::cerr << "Warning: TTL value out of range at line " << line_number << ", skipping" << std::endl;
+                    }
                 }
-            } else 
-            {
+
+            } else {
                 std::cerr << "Warning: Invalid TTL format at line " << line_number << ", skipping" << std::endl;
             }
         }         
